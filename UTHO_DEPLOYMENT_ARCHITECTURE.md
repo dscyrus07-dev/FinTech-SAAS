@@ -186,7 +186,7 @@ services:
       - "3000"
     environment:
       BACKEND_URL: http://backend:8000
-      NEXT_PUBLIC_API_URL: https://test.theairco.ai
+      NEXT_PUBLIC_API_URL: https://insights.theairco.ai
 
 volumes:
   backend_tmp:

@@ -3,7 +3,9 @@ version: '3.9'
 services:
 
   backend:
-    image: theairco/fintech-backend:latest
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
     container_name: fintech_backend
     restart: always
     expose:
@@ -23,10 +25,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 40s
 
   frontend:
-    image: theairco/fintech-frontend:latest
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: fintech_frontend
     restart: always
     expose:
@@ -36,24 +40,17 @@ services:
         condition: service_started
     environment:
       BACKEND_URL: http://backend:8000
-      NEXT_PUBLIC_API_URL: https://test.theairco.ai
+      NEXT_PUBLIC_API_URL: https://insights.theairco.ai
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
-  nginx:
-    image: nginx:alpine
-    container_name: fintech_nginx
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - frontend
-      - backend
-
+  
 volumes:
   backend_tmp:
     driver: local
