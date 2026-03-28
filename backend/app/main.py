@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.routers import upload as upload
 from app.routers import download
 from app.api.routes import upload as hdfc_upload
+from app.api.routes import sync as sync_api
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +30,7 @@ app.add_middleware(
 app.include_router(upload.router, tags=["Processing"])
 app.include_router(download.router, tags=["Download"])
 app.include_router(hdfc_upload.router, prefix="/api", tags=["HDFC Processing"])
+app.include_router(sync_api.router, prefix="/api", tags=["Sync"])
 
 
 @app.get("/health")

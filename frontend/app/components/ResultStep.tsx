@@ -1,11 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ProcessingResult, SheetPreview } from '@/types'
 import CollapsiblePreview from './CollapsiblePreview'
 import DownloadButtons from './DownloadButtons'
 import FeedbackSection from './FeedbackSection'
-import { CheckCircle2, Eye, EyeOff, FileSpreadsheet } from 'lucide-react'
+import { CheckCircle2, Eye, FileSpreadsheet } from 'lucide-react'
+import SpreadsheetEditor from './spreadsheet/SpreadsheetEditor'
+import { SpreadsheetProvider } from './spreadsheet/SpreadsheetContext'
 
 interface ResultStepProps {
   result: ProcessingResult
@@ -55,8 +57,16 @@ const PLACEHOLDER_SHEETS: SheetPreview[] = [
 ]
 
 export default function ResultStep({ result }: ResultStepProps) {
-  const [viewMode, setViewMode] = useState<'preview' | 'full'>('preview')
+  const [viewMode, setViewMode] = useState<'preview' | 'review'>('preview')
   const [expandedSheets, setExpandedSheets] = useState<Set<number>>(new Set())
+  const [isDesktop, setIsDesktop] = useState(false)
+
+  useEffect(() => {
+    setIsDesktop(window.innerWidth >= 1024)
+    const handleResize = () => setIsDesktop(window.innerWidth >= 1024)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   const sheets: SheetPreview[] = [
     result.account_summary || PLACEHOLDER_SHEETS[0],     // Sheet 1 — Summary
@@ -132,73 +142,37 @@ export default function ResultStep({ result }: ResultStepProps) {
             <Eye className="w-3.5 h-3.5" />
             Preview
           </button>
-          <button
-            onClick={() => setViewMode('full')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${viewMode === 'full'
-              ? 'bg-black text-white'
-              : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
-              }`}
-          >
-            <FileSpreadsheet className="w-3.5 h-3.5" />
-            Full Data
-          </button>
+          {isDesktop && (
+            <button
+              onClick={() => setViewMode('review')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${viewMode === 'review'
+                ? 'bg-black text-white'
+                : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200'
+                }`}
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              Review Data
+            </button>
+          )}
         </div>
       </div>
 
-      {viewMode === 'preview' ? (
+      {viewMode === 'preview' && (
         <div className="space-y-3">
           {sheets.map((sheet, idx) => (
             <CollapsiblePreview key={idx} sheet={sheet} />
           ))}
         </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="text-sm font-medium text-neutral-700 mb-3">
-            Full Data View — All Sheets
-          </div>
-          {sheets.map((sheet, idx) => (
-            <div key={idx} className="border border-neutral-200 rounded-lg overflow-hidden">
-              <button
-                onClick={() => toggleSheetExpansion(idx)}
-                className="w-full px-4 py-3 bg-neutral-50 hover:bg-neutral-100 transition-colors flex items-center justify-between text-left"
-              >
-                <span className="text-sm font-medium text-neutral-700">{sheet.title}</span>
-                <span className="text-xs text-neutral-500">
-                  {expandedSheets.has(idx) ? 'Hide' : 'Show'} ({sheet.rows.length} rows)
-                </span>
-              </button>
+      )}
 
-              {expandedSheets.has(idx) && (
-                <div className="border-t border-neutral-200">
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs">
-                      <thead className="bg-neutral-50 border-b border-neutral-200">
-                        <tr>
-                          {sheet.headers.map((header, hIdx) => (
-                            <th key={hIdx} className="px-3 py-2 text-left font-medium text-neutral-700">
-                              {header}
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sheet.rows.map((row, rIdx) => (
-                          <tr key={rIdx} className="border-b border-neutral-100 hover:bg-neutral-50">
-                            {row.map((cell, cIdx) => (
-                              <td key={cIdx} className="px-3 py-2 text-neutral-600">
-                                {cell || '-'}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
+      {viewMode === 'review' && (
+        <SpreadsheetProvider>
+          <SpreadsheetEditor 
+            initialResult={result} 
+            onExit={() => setViewMode('preview')} 
+            apiKey={result.mode === 'hybrid' ? 'requires-auth-key-passthrough-if-needed' : ''} 
+          />
+        </SpreadsheetProvider>
       )}
 
       <DownloadButtons
