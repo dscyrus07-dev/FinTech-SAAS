@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
         errorText = 'Could not read transactions from this PDF. Please ensure it is a valid, text-based bank statement (not a scanned image) downloaded from your bank\'s portal.'
       } else if (lower.includes('parse') || lower.includes('extract')) {
         errorText = 'Could not read transactions from this PDF. Please ensure it is a valid, text-based bank statement (not a scanned image).'
-      } else if (response.status >= 500) {
+      } else if (response.status >= 500 && (!errorText || errorText === 'Processing failed. Please try again.')) {
         errorText = 'An unexpected error occurred while processing your statement. Please try again or contact support.'
       }
 

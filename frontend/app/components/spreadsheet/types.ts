@@ -5,12 +5,29 @@ export const CATEGORY_OPTIONS = [
   'Healthcare', 'Shopping', 'Other'
 ];
 
+export type LearningEventRecord = {
+  sheet_title?: string;
+  row_index?: number;
+  description: string;
+  category: string;
+  confidence?: number;
+  source?: string;
+  bank_name?: string;
+  account_type?: string;
+  recurring_type?: string;
+  pattern?: string;
+  metadata?: Record<string, unknown>;
+};
+
 export type FormatStyle = {
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
   color?: string;
   bg?: string;
+  alignment?: { horizontal?: 'left' | 'center' | 'right' };
+  fontSize?: number;
+  numberFormat?: string;
   note?: string;
 };
 
@@ -49,4 +66,5 @@ export type SpreadsheetState = {
   showFlaggedOnly: boolean;
   filters: Record<number, Record<number, string>>; // sheetId -> columnId -> filter value
   filteredRows: Record<number, number[]>; // sheetId -> array of visible row indices
+  editLog: LearningEventRecord[];
 };

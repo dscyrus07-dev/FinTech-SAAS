@@ -36,6 +36,8 @@ export default function SpreadsheetEditor({ initialResult, onExit, apiKey }: Spr
       { title: 'Sheet 6 — Funds Received', headers: ['Sl. No.', 'Debit Account Number', 'Date', 'Description', 'Amount', 'Category', 'Balance'], rows: [] },
       { title: 'Sheet 7 — Funds Remittance', headers: ['Sl. No.', 'Beneficiary Account', 'Date', 'Description', 'Amount', 'Category', 'Balance'], rows: [] },
       { title: 'Sheet 8 — Raw Transaction', headers: ['Date', 'Description', 'Debit', 'Credit', 'Balance', 'Category', 'Confidence', 'Recurring'], rows: [] },
+      { title: 'Sheet 9 — Source Analysis', headers: ['Transaction Mode', 'Source', 'Identified Category', 'Flag', 'Date', 'Description', 'Credit', 'Debit', 'Balance'], rows: [] },
+      { title: 'Sheet 10 — Category Outcome', headers: ['Category', 'Source', 'June 2025', 'July 2025'], rows: [] },
     ];
 
     const mappedSheets = [
@@ -47,6 +49,8 @@ export default function SpreadsheetEditor({ initialResult, onExit, apiKey }: Spr
       initialResult.funds_received || PLACEHOLDER_SHEETS[5],
       initialResult.funds_remittance || PLACEHOLDER_SHEETS[6],
       initialResult.raw_transactions || PLACEHOLDER_SHEETS[7],
+      initialResult.source_analysis || PLACEHOLDER_SHEETS[8],
+      initialResult.category_outcome || PLACEHOLDER_SHEETS[9],
     ].map((s, idx) => ({
       id: idx,
       title: s.title,
@@ -91,7 +95,11 @@ export default function SpreadsheetEditor({ initialResult, onExit, apiKey }: Spr
         headers: {
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ sheets: payload, api_key: apiKey }),
+        body: JSON.stringify({
+          sheets: payload,
+          learning_events: state.editLog,
+          api_key: apiKey,
+        }),
       });
 
       if (res.ok) {

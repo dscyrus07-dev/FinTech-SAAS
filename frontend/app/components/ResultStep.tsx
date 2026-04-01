@@ -54,6 +54,16 @@ const PLACEHOLDER_SHEETS: SheetPreview[] = [
     headers: ['Date', 'Description', 'Debit', 'Credit', 'Balance', 'Category', 'Confidence', 'Recurring'],
     rows: [],
   },
+  {
+    title: 'Sheet 9 — Source Analysis',
+    headers: ['Transaction Mode', 'Source', 'Identified Category', 'Flag', 'Date', 'Description', 'Credit', 'Debit', 'Balance'],
+    rows: [],
+  },
+  {
+    title: 'Sheet 10 — Category Outcome',
+    headers: ['Category', 'Source', 'Month1', 'Month2', 'Month3', 'Month4', 'Month5', 'Month6'],
+    rows: [],
+  },
 ]
 
 export default function ResultStep({ result }: ResultStepProps) {
@@ -77,6 +87,8 @@ export default function ResultStep({ result }: ResultStepProps) {
     result.funds_received || PLACEHOLDER_SHEETS[5],      // Sheet 6 — Funds Received
     result.funds_remittance || PLACEHOLDER_SHEETS[6],    // Sheet 7 — Funds Remittance
     result.raw_transactions || PLACEHOLDER_SHEETS[7],    // Sheet 8 — Raw Transaction
+    result.source_analysis || PLACEHOLDER_SHEETS[8],     // Sheet 9 — Source Analysis
+    result.category_outcome || PLACEHOLDER_SHEETS[9],    // Sheet 10 — Category Outcome
   ]
 
   const modeLabel = result.mode === 'hybrid' ? 'Hybrid (System + AI)' : 'Free (System Only)'

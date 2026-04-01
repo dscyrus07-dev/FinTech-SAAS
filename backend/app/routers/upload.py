@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Sheet keys aligned to actual Excel sheet order (8 sheets)
+# Sheet keys aligned to actual Excel sheet order (10 sheets)
 SHEET_KEYS = [
     "account_summary",    # Sheet 1 — Summary
     "monthly_analysis",   # Sheet 2 — Monthly Analysis
@@ -48,6 +48,8 @@ SHEET_KEYS = [
     "funds_received",     # Sheet 6 — Funds Received
     "funds_remittance",   # Sheet 7 — Funds Remittance
     "raw_transactions",   # Sheet 8 — Raw Transaction
+    "source_analysis",    # Sheet 9 — Source Analysis
+    "category_outcome",   # Sheet 10 — Category Outcome
 ]
 
 MAX_PREVIEW_ROWS = 50
@@ -67,14 +69,36 @@ def _extract_sheet_previews(excel_path: str) -> dict:
             ws = wb[sheet_name]
             rows_data = []
             headers = []
+            pending_title = None
             
             for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
                 str_row = [str(cell) if cell is not None else "" for cell in row]
-                if row_idx == 0:
+
+                is_single_title_row = sum(1 for cell in str_row if cell.strip()) <= 1
+                if row_idx == 0 and is_single_title_row:
+                    pending_title = str_row[0] if str_row and str_row[0].strip() else sheet_name
+                    continue
+
+                looks_like_header_row = (
+                    len(str_row) >= 2
+                    and str_row[0].strip().lower() == "category"
+                    and str_row[1].strip().lower() == "source"
+                )
+                if headers and looks_like_header_row:
+                    continue
+
+                if is_single_title_row:
+                    continue
+
+                if not headers:
                     headers = str_row
-                else:
-                    if row_idx <= MAX_PREVIEW_ROWS:
-                        rows_data.append(str_row)
+                    if pending_title and headers and headers[0] == pending_title:
+                        # Defensive fallback in case the workbook stored the title in row 0 and headers in row 1.
+                        continue
+                    continue
+
+                if row_idx <= MAX_PREVIEW_ROWS + 1:
+                    rows_data.append(str_row)
             
             previews[SHEET_KEYS[idx]] = {
                 "title": f"Sheet {idx + 1} — {sheet_name}",

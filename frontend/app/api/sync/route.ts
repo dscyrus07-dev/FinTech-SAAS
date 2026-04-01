@@ -29,7 +29,8 @@ export async function POST(request: NextRequest) {
     // If we need authorization headers via API key, it passes them exactly like the codebase does.
     const apiKey = body.api_key;
     const backendPayload = {
-      sheets: body.sheets
+      sheets: body.sheets,
+      learning_events: body.learning_events || [],
     };
     
     console.log('Sending to backend:', `${BACKEND_URL}/api/sync`);

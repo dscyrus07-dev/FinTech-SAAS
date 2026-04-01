@@ -57,6 +57,13 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
     }
   }, [editingCell]);
 
+  const beginEditCell = (rawIndex: number, colIndex: number, val: string) => {
+    const realCol = isRaw ? colIndex - 1 : colIndex;
+    if (realCol < 0) return;
+    setEditingCell({ r: rawIndex, c: colIndex });
+    setEditValue(val);
+  };
+
   useEffect(() => {
     const handleGlobalClick = () => { setContextMenu(null); };
     window.addEventListener('click', handleGlobalClick);
@@ -77,8 +84,37 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
   };
 
   const handleCellDoubleClick = (rawIndex: number, colIndex: number, val: string) => {
-    setEditingCell({ r: rawIndex, c: colIndex });
-    setEditValue(val);
+    beginEditCell(rawIndex, colIndex, val);
+  };
+
+  const getConfidenceScore = (row: string[]) => {
+    const confidenceHeaderIndex = headers.findIndex(h => h.toLowerCase() === 'confidence');
+    if (confidenceHeaderIndex < 0) return null;
+    const realCol = isRaw ? confidenceHeaderIndex - 1 : confidenceHeaderIndex;
+    if (realCol < 0 || realCol >= row.length) return null;
+    const rawValue = String(row[realCol] || '').replace('%', '').trim();
+    const parsed = parseFloat(rawValue);
+    if (Number.isNaN(parsed)) return null;
+    return parsed > 1 ? parsed : parsed * 100;
+  };
+
+  const applyCategoryToSimilar = () => {
+    if (!contextMenu) return;
+    const realCol = isRaw ? contextMenu.c - 1 : contextMenu.c;
+    if (realCol < 0) return;
+    const value = String(sheet.rows[contextMenu.r]?.[realCol] || '');
+    if (!value.trim()) return;
+    dispatch({
+      type: 'APPLY_TO_SIMILAR',
+      payload: {
+        sheetId: sheet.id,
+        rowIndex: contextMenu.r,
+        colIndex: realCol,
+        value,
+        descriptionColIndex: sheet.headers.findIndex(h => h.toLowerCase() === 'description'),
+      },
+    });
+    setContextMenu(null);
   };
 
   const finishEdit = () => {
@@ -118,6 +154,17 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
         } else if (editingCell.r < sheet.rows.length - 1) {
           dispatch({ type: 'SET_SELECTION', payload: { start: { r: editingCell.r + 1, c: 0 }, end: { r: editingCell.r + 1, c: 0 } } });
         }
+      }
+      return;
+    }
+
+    if (e.key === 'Enter' && state.selection) {
+      e.preventDefault();
+      const { start } = state.selection;
+      const realCol = isRaw ? start.c - 1 : start.c;
+      if (realCol >= 0 && start.r < sheet.rows.length) {
+        const val = isRaw ? (start.c === 0 ? '' : sheet.rows[start.r][realCol] || '') : (sheet.rows[start.r][realCol] || '');
+        beginEditCell(start.r, start.c, val);
       }
       return;
     }
@@ -229,8 +276,7 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
         const realCol = isRaw ? start.c - 1 : start.c;
         if (realCol >= 0 && start.r < sheet.rows.length) {
           const val = sheet.rows[start.r][realCol] || '';
-          setEditingCell({ r: start.r, c: start.c });
-          setEditValue(val);
+          beginEditCell(start.r, start.c, val);
         }
       }
       return;
@@ -242,8 +288,7 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
         const { start } = state.selection;
         const realCol = isRaw ? start.c - 1 : start.c;
         if (realCol >= 0 && start.r < sheet.rows.length) {
-          setEditingCell({ r: start.r, c: start.c });
-          setEditValue(e.key);
+          beginEditCell(start.r, start.c, e.key);
         }
       }
     }
@@ -579,6 +624,26 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
   const bounds = getSelectionBounds();
   const showBulkActionBar = bounds && bounds.maxR > bounds.minR && bounds.minC === bounds.maxC;
 
+  const formatDisplayValue = (value: string, style: any) => {
+    if (!style?.numberFormat) return value;
+    const raw = String(value ?? '').trim();
+    if (!raw) return raw;
+
+    const numeric = Number(raw.replace(/[₹,\s]/g, ''));
+    if (!Number.isFinite(numeric)) return value;
+
+    if (style.numberFormat === '₹#,##0.00') {
+      return new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(numeric);
+    }
+    if (style.numberFormat === '#,##0.00') {
+      return new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(numeric);
+    }
+    if (style.numberFormat === '0.00%') {
+      return `${(numeric * 100).toFixed(2)}%`;
+    }
+    return raw;
+  };
+
   return (
     <>
       <div 
@@ -613,19 +678,29 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
              const rowData = displayedRows[virtualRow.index];
              const rawIndex = rowData.idx;
              const cells = rowData.r;
+             const confidenceScore = isRaw ? getConfidenceScore(cells) : null;
+             const confidenceClass = confidenceScore !== null
+               ? confidenceScore < 60
+                 ? 'bg-rose-50'
+                 : confidenceScore < 80
+                   ? 'bg-amber-50'
+                   : ''
+               : '';
 
              return (
               <div
                 key={virtualRow.index}
                 className={cn("absolute left-0 w-full flex text-xs border-b border-neutral-200 hover:bg-neutral-50", 
                   virtualRow.index % 2 === 1 && "bg-neutral-50",
-                  isRaw && sheet.flaggedRows[rawIndex] && "bg-rose-50 hover:bg-rose-100"
+                  confidenceClass,
+                  isRaw && sheet.flaggedRows[rawIndex] && "bg-rose-100 hover:bg-rose-100"
                 )}
                 style={{
                   top: 0,
                   height: `${virtualRow.size}px`,
                   transform: `translateY(${virtualRow.start + 32}px)`,
                 }}
+                title={confidenceScore !== null ? `Confidence: ${confidenceScore.toFixed(0)}%` : undefined}
               >
                 {colVirtualizer.getVirtualItems().map((virtualColumn) => {
                   const cIndex = virtualColumn.index;
@@ -665,10 +740,13 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
                         color: customStyle.color,
                         fontWeight: customStyle.bold ? 'bold' : 'normal',
                         fontStyle: customStyle.italic ? 'italic' : 'normal',
-                        textDecoration: customStyle.underline ? 'underline' : 'none'
+                        textDecoration: customStyle.underline ? 'underline' : 'none',
+                        fontSize: customStyle.fontSize ? `${customStyle.fontSize}px` : undefined,
+                        textAlign: customStyle.alignment?.horizontal || undefined,
                       }}
                       onMouseDown={(e) => handleCellMouseDown(e, rawIndex, cIndex)}
                       onMouseEnter={(e) => handleCellMouseEnter(e, rawIndex, cIndex)}
+                      onClick={() => !isFlagCol && !editing && beginEditCell(rawIndex, cIndex, cellVal)}
                       onDoubleClick={() => !isFlagCol && handleCellDoubleClick(rawIndex, cIndex, cellVal)}
                       onContextMenu={(e) => handleContextMenu(e, rawIndex, cIndex)}
                     >
@@ -709,7 +787,9 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
                           />
                         )
                       ) : (
-                        <span className="truncate w-full leading-tight">{cellVal}</span>
+                        <span className="truncate w-full leading-tight" style={{ textAlign: customStyle.alignment?.horizontal || 'inherit' }}>
+                          {formatDisplayValue(cellVal, customStyle)}
+                        </span>
                       )}
                     </div>
                   );
@@ -738,6 +818,14 @@ export default function SpreadsheetGrid({ sheet }: SpreadsheetGridProps) {
           >
             Add/Edit Note <Plus className="w-3.5 h-3.5" />
           </button>
+          {headers[contextMenu.c]?.toLowerCase() === 'category' && (
+            <button
+              className="w-full text-left px-4 py-2 hover:bg-neutral-100 flex items-center justify-between"
+              onClick={applyCategoryToSimilar}
+            >
+              Apply to Similar <Copy className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button 
             className="w-full text-left px-4 py-2 hover:bg-neutral-100"
             onClick={() => {

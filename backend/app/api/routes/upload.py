@@ -1,6 +1,6 @@
 """
 API endpoints for PDF upload and Excel conversion.
-Supports dynamic bank engine selection: HDFC | Axis | ICICI | Kotak
+Supports dynamic bank engine selection: HDFC | Axis | ICICI | Kotak | SBI
 
 Each bank uses its own dedicated parser, classifier, and report generator.
 No AI. No fuzzy logic. Fully deterministic, bank-specific processing.
@@ -49,11 +49,16 @@ def _get_bank_engine(bank_name: str):
         from ...services.banks.kotak.report_generator import generate_report
         return KotakParser(), generate_report, "kotak"
 
+    if key in ("sbi", "sbibank", "statebankofindia", "statebank"):
+        from ...services.banks.sbi.parser import SBIParser
+        from ...services.banks.sbi.report_generator import generate_report
+        return SBIParser(), generate_report, "sbi"
+
     raise HTTPException(
         status_code=400,
         detail=(
             f"Unsupported bank: '{bank_name}'. "
-            "Supported banks: HDFC, Axis, ICICI, Kotak"
+            "Supported banks: HDFC, Axis, ICICI, Kotak, SBI"
         )
     )
 

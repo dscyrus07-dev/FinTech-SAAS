@@ -6,6 +6,8 @@ services:
     build: ./backend
     container_name: fintech_backend
     restart: always
+    networks:
+      - fintech-network
     ports:
       - "8000:8000"
     environment:
@@ -29,6 +31,8 @@ services:
     build: ./frontend
     container_name: fintech_frontend
     restart: always
+    networks:
+      - fintech-network
     depends_on:
       backend:
         condition: service_started
@@ -45,6 +49,5 @@ volumes:
     driver: local
 
 networks:
-  default:
-    name: airco-insights_default
-    external: true
+  fintech-network:
+    driver: bridge

@@ -20,6 +20,13 @@ export default function SpreadsheetToolbar({ onSave, onDownload, onToggleHistory
   const [showFilterOptions, setShowFilterOptions] = useState(false);
 
   const activeSheet = state.sheets[state.activeSheetId];
+  const selectedCategoryCol = activeSheet?.headers.findIndex(h => h.toLowerCase() === 'category') ?? -1;
+  const hasCategorySelection = Boolean(
+    state.selection &&
+    selectedCategoryCol >= 0 &&
+    state.selection.start.c === selectedCategoryCol &&
+    state.selection.end.c === selectedCategoryCol
+  );
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -130,6 +137,17 @@ export default function SpreadsheetToolbar({ onSave, onDownload, onToggleHistory
   const applyFilters = () => {
     dispatch({ type: 'APPLY_FILTERS', payload: {} });
     setShowFilterOptions(false);
+  };
+
+  const applySelectedCategory = (category: string) => {
+    if (!state.selection || selectedCategoryCol < 0) return;
+    dispatch({
+      type: 'BULK_UPDATE_CATEGORY',
+      payload: {
+        category,
+        colIndex: selectedCategoryCol,
+      },
+    });
   };
 
   return (
@@ -376,6 +394,17 @@ export default function SpreadsheetToolbar({ onSave, onDownload, onToggleHistory
         </button>
 
       </div>
+
+      {hasCategorySelection && (
+        <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-xs border-t bg-white">
+          <span className="text-neutral-500 font-medium">Quick category actions:</span>
+          <button onClick={() => applySelectedCategory('Salary & Income')} className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100">Mark Salary</button>
+          <button onClick={() => applySelectedCategory('EMI & Loan')} className="px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100">Mark EMI</button>
+          <button onClick={() => applySelectedCategory('Food & Dining')} className="px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100">Mark Food</button>
+          <button onClick={() => applySelectedCategory('Travel & Transport')} className="px-3 py-1 rounded-full bg-violet-50 text-violet-700 border border-violet-200 hover:bg-violet-100">Mark Travel</button>
+          <button onClick={() => applySelectedCategory('Other')} className="px-3 py-1 rounded-full bg-neutral-50 text-neutral-700 border border-neutral-200 hover:bg-neutral-100">Mark Other</button>
+        </div>
+      )}
 
       {/* Quick Stats Bar */}
       <QuickStatsBar />

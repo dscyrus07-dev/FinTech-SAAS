@@ -22,3 +22,9 @@ UTHO_HOST: 134.195.138.56
 UTHO_USER: root
 UTHO_SSH_KEY: Your private SSH key content
 Monitor deployments: Check the "Actions" tab in your GitHub repository
+
+What’s still left if you want to go further
+A dedicated Learning Dashboard
+Explicit Suggested vs Learned category dropdown in the cell editor
+Smarter rule promotion UI with approve/reject
+More advanced entity clustering for recurring merchants/employers

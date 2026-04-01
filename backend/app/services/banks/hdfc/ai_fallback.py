@@ -19,6 +19,8 @@ import json
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
+from ...intelligence import GroqIntelligenceLayer, LearningStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,6 +68,12 @@ class HDFCAIFallback:
         """
         self.api_key = api_key
         self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.learning_store = LearningStore()
+        self.intelligence = GroqIntelligenceLayer(
+            api_key=api_key,
+            bank_name="HDFC",
+            learning_store=self.learning_store,
+        )
     
     def estimate_cost(self, transaction_count: int) -> Dict[str, Any]:
         """
@@ -102,62 +110,21 @@ class HDFCAIFallback:
         bank_name: str = "HDFC",
         account_type: str = "Salaried",
     ) -> Tuple[List[Dict[str, Any]], AIClassificationResult]:
-        """
-        Classify transactions using Claude AI.
-        
-        Args:
-            transactions: List of unclassified transactions
-            bank_name: Bank name for context
-            account_type: Account type for context
-            
-        Returns:
-            Tuple of (classified_transactions, result_metrics)
-        """
         if not transactions:
             return [], AIClassificationResult(0, 0, 0, 0, 0)
-        
-        if not self.api_key:
-            self.logger.warning("No API key provided, returning transactions as Others")
-            return self._fallback_to_others(transactions), AIClassificationResult(
-                classified_count=0,
-                total_sent=len(transactions),
-                api_calls=0,
-                estimated_cost_usd=0,
-                estimated_cost_inr=0,
-            )
-        
-        self.logger.info("AI classifying %d transactions", len(transactions))
-        
-        # Process in batches
-        classified = []
-        api_calls = 0
-        
-        for i in range(0, len(transactions), self.MAX_BATCH_SIZE):
-            batch = transactions[i:i + self.MAX_BATCH_SIZE]
-            
-            try:
-                batch_results = self._classify_batch(batch, bank_name, account_type)
-                classified.extend(batch_results)
-                api_calls += 1
-            except Exception as e:
-                self.logger.error("AI batch classification failed: %s", str(e))
-                # Fallback to Others for failed batch
-                classified.extend(self._fallback_to_others(batch))
-        
-        # Calculate actual cost
-        cost_estimate = self.estimate_cost(len(transactions))
-        
-        actual_classified = sum(
-            1 for t in classified
-            if not t.get("category", "").startswith("Others")
+
+        classified, stats = self.intelligence.classify(
+            transactions=transactions,
+            bank_name=bank_name,
+            account_type=account_type,
+            allowed_categories=self.DEBIT_CATEGORIES + self.CREDIT_CATEGORIES,
         )
-        
         return classified, AIClassificationResult(
-            classified_count=actual_classified,
-            total_sent=len(transactions),
-            api_calls=api_calls,
-            estimated_cost_usd=cost_estimate["estimated_cost_usd"],
-            estimated_cost_inr=cost_estimate["estimated_cost_inr"],
+            classified_count=stats.classified_count,
+            total_sent=stats.total_sent,
+            api_calls=stats.api_calls,
+            estimated_cost_usd=stats.estimated_cost_usd,
+            estimated_cost_inr=stats.estimated_cost_inr,
         )
     
     def _classify_batch(

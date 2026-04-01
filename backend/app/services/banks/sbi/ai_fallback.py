@@ -6,6 +6,8 @@ import logging
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
+from ...intelligence import GroqIntelligenceLayer, LearningStore
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,21 @@ class SBIAIFallback:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key
         self.logger  = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.learning_store = LearningStore()
+        self.intelligence = GroqIntelligenceLayer(
+            api_key=api_key,
+            bank_name="SBI",
+            learning_store=self.learning_store,
+        )
+
+    def classify_unclassified(
+        self,
+        transactions: List[Dict[str, Any]],
+        bank_name: str = "SBI",
+        account_type: str = "Salaried",
+    ) -> List[Dict[str, Any]]:
+        classified, _ = self.classify(transactions, bank_name=bank_name, account_type=account_type)
+        return classified
 
     def classify(
         self,
@@ -29,17 +46,21 @@ class SBIAIFallback:
         bank_name: str = "SBI",
         account_type: str = "Salaried",
     ) -> Tuple[List[Dict[str, Any]], AIClassificationResult]:
-        result = []
-        for txn in transactions:
-            txn_copy = dict(txn)
-            is_debit = (txn_copy.get("debit") or 0) > 0
-            if not txn_copy.get("category") or txn_copy["category"].startswith("Others"):
-                txn_copy["category"]   = "Others Debit" if is_debit else "Others Credit"
-                txn_copy["confidence"] = 0.5
-                txn_copy["source"]     = "ai_fallback_stub"
-            result.append(txn_copy)
-        stats = AIClassificationResult(
-            classified_count=0, total_sent=len(transactions),
-            api_calls=0, estimated_cost_usd=0.0, estimated_cost_inr=0.0,
+        result, stats = self.intelligence.classify(
+            transactions=transactions,
+            bank_name=bank_name,
+            account_type=account_type,
+            allowed_categories=[
+                "ATM Withdrawal", "Food", "Shopping", "Transport", "Bills",
+                "Entertainment", "Health", "Education", "EMI", "Investment",
+                "Transfer", "Salary", "Interest", "Refund", "Transfer In",
+                "Others Debit", "Others Credit",
+            ],
         )
-        return result, stats
+        return result, AIClassificationResult(
+            classified_count=stats.classified_count,
+            total_sent=stats.total_sent,
+            api_calls=stats.api_calls,
+            estimated_cost_usd=stats.estimated_cost_usd,
+            estimated_cost_inr=stats.estimated_cost_inr,
+        )

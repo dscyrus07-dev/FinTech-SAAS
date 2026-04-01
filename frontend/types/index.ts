@@ -45,6 +45,8 @@ export interface ProcessingResult {
   funds_received?: SheetPreview     // Sheet 6 — Funds Received
   funds_remittance?: SheetPreview   // Sheet 7 — Funds Remittance
   raw_transactions?: SheetPreview   // Sheet 8 — Raw Transaction
+  source_analysis?: SheetPreview    // Sheet 9 — Source Analysis
+  category_outcome?: SheetPreview   // Sheet 10 — Category Outcome
   stats?: {
     total_transactions: number
     rule_engine_classified: number
@@ -65,6 +67,49 @@ export interface SheetPreview {
   title: string
   headers: string[]
   rows: string[][]
+}
+
+export interface SheetData {
+  title: string
+  headers: string[]
+  rows: string[][]
+}
+
+export type SelectionRange = {
+  start: { row: number; column: number };
+  end: { row: number; column: number };
+};
+
+export type HistoryEntry = {
+  type: 'insert' | 'delete' | 'update';
+  data: any;
+};
+
+export type SpreadsheetState = {
+  sheets: SheetData[];
+  activeSheetId: number;
+  selection: SelectionRange | null;
+  history: HistoryEntry[];
+  historyIndex: number; // For undo/redo
+  globalDirty: boolean; // For "Save Changes" status
+  showFlaggedOnly: boolean;
+  filters: Record<number, Record<number, string>>; // sheetId -> columnId -> filter value
+  filteredRows: Record<number, number[]>; // sheetId -> array of visible row indices
+  editLog: LearningEventRecord[];
+};
+
+export interface LearningEventRecord {
+  sheet_title?: string
+  row_index?: number
+  description: string
+  category: string
+  confidence?: number
+  source?: string
+  bank_name?: string
+  account_type?: string
+  recurring_type?: string
+  pattern?: string
+  metadata?: Record<string, unknown>
 }
 
 export type Step = 1 | 2 | 3 | 4 | 5

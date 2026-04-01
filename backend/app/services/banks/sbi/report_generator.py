@@ -23,16 +23,19 @@ Every output cell traceable to an exact rule.
 
 import logging
 import os
+import re
 from collections import Counter, OrderedDict
 from typing import Dict, List, Tuple, Any, Optional
 
 import pandas as pd
 from .sbi_classifier import SBIClassifier
+from ...intelligence import LearningStore
 
 logger = logging.getLogger(__name__)
 
 # Initialize the unified SBI classifier (singleton)
 _classifier = None
+_learning_store = None
 
 def get_classifier() -> SBIClassifier:
     """Get or create the unified SBI classifier instance."""
@@ -47,8 +50,37 @@ def classify(row) -> Tuple[str, int]:
     Advanced classification using comprehensive keyword database.
     Uses entity interpretation with direction awareness.
     """
+    global _learning_store
+    description = str(row.get("Description", ""))
+    if _learning_store is None:
+        _learning_store = LearningStore()
+    learned = _learning_store.lookup(description, bank_name="SBI")
+    if learned:
+        return (str(learned.get("category", "Others")), int(max(float(learned.get("confidence", 0.9)) * 100, 90)))
+
     classifier = get_classifier()
-    return classifier.classify(row)
+    result = classifier.classify(row)
+    try:
+        category = str(result[0] if isinstance(result, tuple) else result.get("display_category") or result.get("internal_category") or "")
+        confidence = float(result[1] if isinstance(result, tuple) else result.get("confidence_score") or 0)
+        if category and confidence >= 80 and category not in {"Others", "Others Debit", "Others Credit"}:
+            if _learning_store is None:
+                _learning_store = LearningStore()
+            _learning_store.record_observation(
+                description=row.get("Description", ""),
+                category=category,
+                confidence=confidence / 100.0,
+                source="rule",
+                bank_name="SBI",
+                account_type="",
+                metadata={
+                    "matched_rule": result.get("matched_rule", "") if isinstance(result, dict) else "",
+                    "matched_token": result.get("matched_token", "") if isinstance(result, dict) else "",
+                },
+            )
+    except Exception:
+        logger.debug("SBI learning-store update skipped", exc_info=True)
+    return result
 
 
 def detect_recurring(df: pd.DataFrame) -> pd.DataFrame:
@@ -139,6 +171,7 @@ def generate_report(
     fmt_currency = workbook.add_format({"num_format": "₹#,##0.00", "border": 1})
     fmt_date = workbook.add_format({"num_format": "dd-mmm-yyyy", "border": 1})
     fmt_text = workbook.add_format({"border": 1, "align": "left"})
+    fmt_integer = workbook.add_format({"num_format": "#,##0", "border": 1, "align": "center"})
     fmt_percent = workbook.add_format({"num_format": "0%", "border": 1})
     fmt_month_header = workbook.add_format({
         "bold": True, "bg_color": "#D9E1F2", "border": 1,
@@ -304,19 +337,329 @@ def generate_report(
     # Additional sheets 6-8 (Monthly Stats, Funds Remittance, Raw Transaction) - simplified versions
     
     # ══════════════════════════════════════════════════════════════════════════
-    # SHEET 9 — Finbit (Finbit-specific monthly metrics)
+    # SHEET 9 — Source Analysis
     # ══════════════════════════════════════════════════════════════════════════
-    ws9 = workbook.add_worksheet("Finbit")
-    
-    # Calculate opening balance from first transaction
+    source_df = df.copy()
+    if "Description" not in source_df.columns:
+        source_df["Description"] = ""
+    if "Date" not in source_df.columns:
+        source_df["Date"] = pd.NaT
+    if "Credit" not in source_df.columns:
+        source_df["Credit"] = 0
+    if "Debit" not in source_df.columns:
+        source_df["Debit"] = 0
+    if "Balance" not in source_df.columns:
+        source_df["Balance"] = 0
+    if "Category" not in source_df.columns:
+        source_df["Category"] = "Others"
+
+    def _normalize_text(value: Any) -> str:
+        text = str(value or "").upper()
+        text = re.sub(r"[^A-Z0-9\s/\-_.]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def _detect_transaction_mode(description: Any) -> str:
+        desc = _normalize_text(description)
+        mode_patterns = [
+            ("Cash Deposit", ["CASH DEPOSIT", "CASH DEP", "CDM", "CASHDEP", "DEP BY CASH", "BY CASH"]),
+            ("Cash Withdrawal", ["CASH WITHDRAWAL", "CASH WDL", "CASH W/D", "CASHWITHDRAWAL"]),
+            ("ATM Withdrawal", ["ATM", "ATW", "ATM WDL", "ATM WITHDRAWAL", "ATM CASH", "VISA ATM", "NFS ATM"]),
+            ("UPI", ["UPI"]),
+            ("IMPS", ["IMPS"]),
+            ("NEFT", ["NEFT", "NEFTDR", "NEFT CR", "NEFT DR", "RTGS"]),
+            ("ACH", ["ACH", "ACH D", "ACH DR", "ACH CR", "NACH", "ECS", "E-MANDATE", "AUTOPAY"]),
+            ("Cheque", ["CHEQUE", "CHQ", "CLG"]),
+            ("Card Settlement", ["POS", "CARD SETTLEMENT", "VISA", "MASTER", "RUPAY"]),
+        ]
+        for mode, patterns in mode_patterns:
+            if any(p in desc for p in patterns):
+                return mode
+        return "Other"
+
+    def _extract_source(description: Any, mode: str) -> str:
+        desc = _normalize_text(description)
+        source_rules = [
+            (r"\bMAKE ?MY ?TRIP\b|\bMMT\b", "MakeMyTrip"),
+            (r"\bAGODA\b", "Agoda"),
+            (r"\bAIRBNB\b", "Airbnb"),
+            (r"\bBOOKING\.COM\b|\bBOOKING\b", "Booking.com"),
+            (r"\bUBER\b|\bOLA\b|\bRAPIDO\b", "Cab Service"),
+            (r"\bZOMATO\b", "Zomato"),
+            (r"\bSWIGGY\b", "Swiggy"),
+            (r"\bNETFLIX\b", "Netflix"),
+            (r"\bSPOTIFY\b", "Spotify"),
+            (r"\bAMAZON PRIME\b|\bPRIME VIDEO\b|\bPRIMEVIDEO\b", "Amazon Prime"),
+            (r"\bDISNEY\+?\b|\bHOTSTAR\b", "Disney+ Hotstar"),
+            (r"\bPHONEPE\b", "PhonePe"),
+            (r"\bPAYTM\b", "Paytm"),
+            (r"\bGOOGLE PAY\b|\bGPAY\b", "Google Pay"),
+            (r"\bAMAZON\b", "Amazon"),
+            (r"\bFLIPKART\b", "Flipkart"),
+            (r"\bRENT\b|\bLANDLORD\b", "Landlord"),
+            (r"\bSALARY\b|\bPAYROLL\b|\bSTIPEND\b|\bWAGES\b", "Employer"),
+            (r"\bEMI\b|\bLOAN\b|\bFINANCE\b|\bNACH\b|\bACH\b", "Bank/Loan Provider"),
+            (r"\bENTERPRISES?\b", "Enterprise"),
+            (r"\bGST\b|\bCBDT\b|\bTAX\b", "Government / Tax Authority"),
+        ]
+        for pattern, source_name in source_rules:
+            if re.search(pattern, desc):
+                return source_name
+        cleaned = desc
+        for token in ["NEFT", "NEFTDR", "NEFT CR", "NEFT DR", "RTGS", "IMPS", "UPI", "ACH", "NACH", "ECS", "ATM", "ATW", "POS", "CARD", "SETTLEMENT", "CASH", "DEPOSIT", "WITHDRAWAL", "WITHDRWL", "TRF", "TRANSFER", "PAYMENT", "DR", "CR", "TO", "FROM", "BY", "SELF", "CHQ", "CHEQUE", "CLG", "REF", "TXN", "TRANSACTION", "NO", "NUMBER"]:
+            cleaned = re.sub(rf"\b{re.escape(token)}\b", " ", cleaned)
+        cleaned = re.sub(r"\b\d{2}[/-]\d{2}[/-]\d{2,4}\b", " ", cleaned)
+        cleaned = re.sub(r"\b\d+\b", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_./")
+        if not cleaned:
+            return "Unknown"
+        tokens = [tok for tok in cleaned.split() if len(tok) > 2]
+        if not tokens:
+            return "Unknown"
+        return " ".join(tokens[:4]).title()
+
+    def _map_identified_category(source: str, mode: str, description: Any, existing_category: str, is_credit: bool) -> str:
+        desc = _normalize_text(description)
+        src = _normalize_text(source)
+        if any(k in src for k in ["SALARY", "EMPLOYER"]):
+            return "Salary"
+        if any(k in src for k in ["LANDLORD", "RENT"]):
+            return "Rent"
+        if any(k in src for k in ["NETFLIX", "SPOTIFY", "PRIME", "HOTSTAR", "DISNEY"]):
+            return "Subscription"
+        if any(k in src for k in ["ZOMATO", "SWIGGY"]):
+            return "Food"
+        if any(k in src for k in ["MAKEMYTRIP", "AGODA", "AIRBNB", "BOOKING.COM", "CAB SERVICE"]):
+            return "Travel"
+        if any(k in src for k in ["PHONEPE", "PAYTM", "GOOGLE PAY"]):
+            return "Digital Wallet"
+        if any(k in src for k in ["ENTERPRISE", "BUSINESS INCOME"]):
+            return "Business Income" if is_credit else "Business Expense"
+        if any(k in src for k in ["BANK/LOAN PROVIDER", "EMI", "LOAN", "FINANCE"]):
+            return "EMI / Loan"
+        if any(k in src for k in ["GOVERNMENT", "TAX"]):
+            return "Tax"
+        if any(k in desc for k in ["ELECTRICITY", "WATER", "BILL", "GAS", "BROADBAND", "RECHARGE"]):
+            return "Utilities"
+        if mode == "Cash Deposit":
+            return "Cash Deposit"
+        if mode == "Cash Withdrawal":
+            return "Cash Withdrawal"
+        if mode == "ATM Withdrawal":
+            return "ATM Withdrawal"
+        if mode == "UPI":
+            return "Transfer" if is_credit else "UPI Payment"
+        if mode in {"IMPS", "NEFT", "ACH"}:
+            return "Transfer" if is_credit else (existing_category if existing_category and existing_category != "Others" else "Transfer Out")
+        if existing_category and existing_category != "Others":
+            return existing_category
+        return "Others"
+
+    def _flag_transaction(amount: float, source: str, recurring: bool, mode: str) -> str:
+        flags = []
+        if amount >= 100000:
+            flags.append("High Value")
+        if recurring:
+            flags.append("Recurring")
+        if source == "Unknown" and amount >= 50000:
+            flags.append("Suspicious")
+        if mode == "Other" and source == "Unknown" and amount >= 25000:
+            flags.append("Review")
+        return ", ".join(flags)
+
+    source_df["TransactionMode"] = source_df["Description"].apply(_detect_transaction_mode)
+    source_df["Source"] = [_extract_source(desc, mode) for desc, mode in zip(source_df["Description"], source_df["TransactionMode"])]
+    source_df["IsCredit"] = source_df["Credit"].fillna(0) > 0
+    source_df["TxnAmount"] = source_df["Credit"].where(source_df["Credit"].fillna(0) > 0, source_df["Debit"].fillna(0))
+    recurring_keys = set()
+    source_groups = source_df.groupby(source_df["Source"].str.lower().fillna("unknown"))
+    for key, group in source_groups:
+        if key == "unknown" or len(group) < 3:
+            continue
+        month_count = group["Date"].dt.to_period("M").nunique() if "Date" in group else 0
+        if month_count >= 2:
+            recurring_keys.add(key)
+    source_df["IsRecurring"] = source_df["Source"].str.lower().fillna("unknown").isin(recurring_keys)
+    source_df["IdentifiedCategory"] = [
+        _map_identified_category(source, mode, desc, cat, is_credit)
+        for source, mode, desc, cat, is_credit in zip(
+            source_df["Source"], source_df["TransactionMode"], source_df["Description"], source_df["Category"], source_df["IsCredit"]
+        )
+    ]
+    source_df["Flag"] = [
+        _flag_transaction(amount, source, recurring, mode)
+        for amount, source, recurring, mode in zip(
+            source_df["TxnAmount"].fillna(0), source_df["Source"], source_df["IsRecurring"], source_df["TransactionMode"]
+        )
+    ]
+    source_df["Month"] = source_df["Date"].dt.to_period("M").astype(str)
+    source_df = source_df.sort_values(["Date", "Description"], kind="stable").reset_index(drop=True)
+
+    ws9 = workbook.add_worksheet("Source Analysis")
+    ws9.set_column(0, 0, 18)
+    ws9.set_column(1, 1, 24)
+    ws9.set_column(2, 2, 22)
+    ws9.set_column(3, 3, 18)
+    ws9.set_column(4, 4, 14)
+    ws9.set_column(5, 5, 50)
+    ws9.set_column(6, 6, 16)
+    ws9.set_column(7, 7, 16)
+    ws9.set_column(8, 8, 16)
+    source_headers = ["Transaction Mode", "Source", "Identified Category", "Flag", "Date", "Description", "Credit", "Debit", "Balance"]
+    ws9.merge_range(0, 0, 0, len(source_headers) - 1, "SOURCE ANALYSIS", fmt_section_title)
+    for ci, header in enumerate(source_headers):
+        ws9.write(1, ci, header, fmt_header)
+    for ri, row in enumerate(source_df.itertuples(index=False), 2):
+        ws9.write(ri, 0, getattr(row, "TransactionMode", ""), fmt_text)
+        ws9.write(ri, 1, getattr(row, "Source", ""), fmt_text)
+        ws9.write(ri, 2, getattr(row, "IdentifiedCategory", ""), fmt_text)
+        ws9.write(ri, 3, getattr(row, "Flag", ""), fmt_text)
+        date_val = getattr(row, "Date", None)
+        if pd.notna(date_val):
+            ws9.write_datetime(ri, 4, date_val.to_pydatetime(), fmt_date)
+        else:
+            ws9.write(ri, 4, "", fmt_text)
+        ws9.write(ri, 5, getattr(row, "Description", ""), fmt_text)
+        credit = float(getattr(row, "Credit", 0) or 0)
+        debit = float(getattr(row, "Debit", 0) or 0)
+        balance = float(getattr(row, "Balance", 0) or 0)
+        ws9.write_number(ri, 6, credit, fmt_currency) if credit > 0 else ws9.write(ri, 6, "", fmt_text)
+        ws9.write_number(ri, 7, debit, fmt_currency) if debit > 0 else ws9.write(ri, 7, "", fmt_text)
+        ws9.write_number(ri, 8, balance, fmt_currency)
+    ws9.freeze_panes(2, 0)
+    if len(source_df) > 0:
+        ws9.autofilter(1, 0, len(source_df) + 1, len(source_headers) - 1)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SHEET 10 — Category Outcome
+    # ══════════════════════════════════════════════════════════════════════════
+    frame = source_df.copy()
+    frame["Category"] = frame["IdentifiedCategory"].fillna("").astype(str).str.strip()
+    frame.loc[frame["Category"] == "", "Category"] = "Others"
+    frame["Source"] = frame["Source"].fillna("").astype(str).str.strip()
+    frame.loc[frame["Source"] == "", "Source"] = "Unknown"
+    frame["Month"] = frame["Month"].fillna("").astype(str).str.strip()
+    frame["Credit"] = pd.to_numeric(frame["Credit"], errors="coerce").fillna(0)
+    frame["Debit"] = pd.to_numeric(frame["Debit"], errors="coerce").fillna(0)
+    frame["Flag"] = frame.get("Flag", "")
+    frame["Flag"] = frame["Flag"].fillna("").astype(str).str.strip()
+    month_dt = pd.to_datetime(frame["Month"], errors="coerce")
+    frame["MonthKey"] = month_dt.dt.to_period("M").astype(str)
+    month_periods = []
+    for period in month_dt.dropna().dt.to_period("M").tolist():
+        if period not in month_periods:
+            month_periods.append(period)
+    month_periods = sorted(month_periods)[:6]
+    month_keys = [period.strftime("%Y-%m") for period in month_periods]
+    month_labels = [period.strftime("%B %Y") for period in month_periods]
+    month_lookup = dict(zip(month_keys, month_labels))
+
+    def _pivot_metric(value_col: str, filter_mask: pd.Series, agg_kind: str) -> pd.DataFrame:
+        base = frame.loc[filter_mask, ["Category", "Source", "MonthKey", value_col]].copy()
+        if base.empty:
+            return pd.DataFrame(columns=["Category", "Source", *month_labels])
+        base["MetricValue"] = 1 if agg_kind == "count" else base[value_col]
+        grouped = base.groupby(["Category", "Source", "MonthKey"], dropna=False)["MetricValue"].sum().reset_index()
+        pivot = grouped.pivot_table(index=["Category", "Source"], columns="MonthKey", values="MetricValue", aggfunc="sum", fill_value=0)
+        pivot = pivot.reindex(columns=month_keys, fill_value=0).reset_index().rename(columns=month_lookup)
+        for label in month_labels:
+            if label not in pivot.columns:
+                pivot[label] = 0
+        return pivot[["Category", "Source", *month_labels]]
+
+    credit_mask = frame["Credit"] > 0
+    debit_mask = frame["Debit"] > 0
+    credit_count = _pivot_metric("Credit", credit_mask, "count")
+    debit_count = _pivot_metric("Debit", debit_mask, "count")
+    credit_amount = _pivot_metric("Credit", credit_mask, "amount")
+    debit_amount = _pivot_metric("Debit", debit_mask, "amount")
+
+    def _sort_table(table: pd.DataFrame) -> pd.DataFrame:
+        if table.empty:
+            return table
+        return table.sort_values(["Category", "Source"], kind="stable").reset_index(drop=True)
+
+    outcome_tables = {
+        "month_labels": month_labels,
+        "credit_count": _sort_table(credit_count),
+        "debit_count": _sort_table(debit_count),
+        "credit_amount": _sort_table(credit_amount),
+        "debit_amount": _sort_table(debit_amount),
+    }
+
+    ws10 = workbook.add_worksheet("Category Outcome")
+    ws10.set_column(0, 0, 22)
+    ws10.set_column(1, 1, 24)
+    for col_idx in range(2, 2 + len(month_labels)):
+        ws10.set_column(col_idx, col_idx, 14)
+    outcome_headers = ["Category", "Source", *month_labels]
+
+    def _write_table(start_row: int, title: str, table_df: pd.DataFrame) -> int:
+        end_col = len(outcome_headers) - 1
+        ws10.merge_range(start_row, 0, start_row, end_col, title, fmt_section_title)
+        header_row = start_row + 1
+        for ci, header in enumerate(outcome_headers):
+            ws10.write(header_row, ci, header, fmt_header)
+        data_row = header_row + 1
+        if table_df is None or table_df.empty:
+            return data_row
+        current_row = data_row
+        category_order = []
+        for category in table_df["Category"].fillna("").astype(str).tolist():
+            if category not in category_order:
+                category_order.append(category)
+        for category in category_order:
+            category_rows = table_df[table_df["Category"] == category].copy()
+            if category_rows.empty:
+                continue
+            subtotal_values = {month_label: float(category_rows[month_label].fillna(0).sum()) for month_label in month_labels}
+            ws10.write(current_row, 0, category or "Others", fmt_header)
+            ws10.write(current_row, 1, "All Sources", fmt_header)
+            for mi, month_label in enumerate(month_labels, 2):
+                value = subtotal_values.get(month_label, 0)
+                if "Amount" in title:
+                    ws10.write_number(current_row, mi, float(value or 0), fmt_currency)
+                else:
+                    ws10.write_number(current_row, mi, int(float(value or 0)), fmt_integer)
+            current_row += 1
+            for _, row in category_rows.sort_values(["Source"], kind="stable").iterrows():
+                ws10.write(current_row, 0, getattr(row, "Category", ""), fmt_text)
+                ws10.write(current_row, 1, getattr(row, "Source", ""), fmt_text)
+                for mi, month_label in enumerate(month_labels, 2):
+                    value = row.get(month_label, 0)
+                    if value:
+                        if "Amount" in title:
+                            ws10.write_number(current_row, mi, float(value), fmt_currency)
+                        else:
+                            ws10.write_number(current_row, mi, int(float(value)), fmt_integer)
+                    else:
+                        ws10.write_blank(current_row, mi, None, fmt_text)
+                ws10.set_row(current_row, None, None, {"level": 1, "hidden": True})
+                current_row += 1
+        ws10.freeze_panes(2, 0)
+        return current_row
+
+    next_row = 0
+    next_row = _write_table(next_row, "CATEGORY OUTCOME  Credit Count", outcome_tables.get("credit_count", pd.DataFrame()))
+    next_row += 1
+    next_row = _write_table(next_row, "CATEGORY OUTCOME  Debit Count", outcome_tables.get("debit_count", pd.DataFrame()))
+    next_row += 1
+    next_row = _write_table(next_row, "CATEGORY OUTCOME  Credit Amount", outcome_tables.get("credit_amount", pd.DataFrame()))
+    next_row += 1
+    _write_table(next_row, "CATEGORY OUTCOME  Debit Amount", outcome_tables.get("debit_amount", pd.DataFrame()))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SHEET 11 — Finbit
+    # ══════════════════════════════════════════════════════════════════════════
+    ws11 = workbook.add_worksheet("Finbit")
+
     opening_balance = 0
     if len(df) > 0:
         first = df.iloc[0]
         opening_balance = first["Balance"] - first["Credit"] + first["Debit"]
-    
+
     finbit_months, finbit_data = _compute_finbit_monthly(df, opening_balance)
-    
-    # Define all 30 Finbit metrics in order
+
     finbit_metrics = [
         ("monthlyAvgBal", "Monthly Avg Balance"),
         ("maxBalance", "Max Balance"),
@@ -349,36 +692,36 @@ def generate_report(
         ("eodMinBalance", "EOD Min Balance"),
         ("eodMaxBalance", "EOD Max Balance"),
     ]
-    
-    ws9.set_column(0, 0, 28)
+
+    ws11.set_column(0, 0, 28)
     for c in range(1, len(finbit_months) + 1):
-        ws9.set_column(c, c, 15)
-    
-    ws9.write(0, 0, "Metric", fmt_header)
+        ws11.set_column(c, c, 15)
+
+    ws11.write(0, 0, "Metric", fmt_header)
     for c_idx, m_label in enumerate(finbit_months, 1):
-        ws9.write(0, c_idx, m_label, fmt_header)
-    
+        ws11.write(0, c_idx, m_label, fmt_header)
+
     for r_idx, (metric_key, metric_label) in enumerate(finbit_metrics, 1):
-        ws9.write(r_idx, 0, metric_label, fmt_sub_header)
+        ws11.write(r_idx, 0, metric_label, fmt_sub_header)
         for c_idx, m_label in enumerate(finbit_months, 1):
             val = finbit_data.get(m_label, {}).get(metric_key, 0)
             if isinstance(val, (int, float)):
                 if metric_key in ["inwBounce", "outwBounce"]:
-                    ws9.write_number(r_idx, c_idx, val, fmt_text)
+                    ws11.write_number(r_idx, c_idx, val, fmt_text)
                 else:
-                    ws9.write_number(r_idx, c_idx, val, fmt_currency)
+                    ws11.write_number(r_idx, c_idx, val, fmt_currency)
             else:
-                ws9.write(r_idx, c_idx, val, fmt_text)
-    
-    ws9.freeze_panes(1, 1)
-    
+                ws11.write(r_idx, c_idx, val, fmt_text)
+
+    ws11.freeze_panes(1, 1)
+
     # ── GLOBAL STYLE ─────────────────────────────────────────────────────────
-    for ws in [ws1, ws2, ws3, ws4, ws5, ws9]:
+    for ws in [ws1, ws2, ws3, ws4, ws5, ws9, ws10, ws11]:
         ws.hide_gridlines(2)
         ws.set_default_row(18)
-    
+
     writer.close()
-    
+
     # Build stats
     stats = {
         "total_transactions": len(df),
@@ -391,15 +734,15 @@ def generate_report(
         "months": len(months),
         "recurring_count": int((df["Recurring"] == "Yes").sum()),
         "categories_used": len(df["Category"].unique()),
-        "sheets": 9,
+        "sheets": 11,
     }
-    
+
     logger.info(
-        "SBI report generated: %d transactions, %s to %s, %d months, %d recurring (9 sheets)",
+        "SBI report generated: %d transactions, %s to %s, %d months, %d recurring (11 sheets)",
         stats["total_transactions"], stats["date_from"], stats["date_to"],
         stats["months"], stats["recurring_count"],
     )
-    
+
     return stats
 
 

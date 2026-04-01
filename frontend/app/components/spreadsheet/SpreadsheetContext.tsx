@@ -1,7 +1,7 @@
 'use client'
 
 import React, { createContext, useReducer, useContext, PropsWithChildren } from 'react';
-import { SheetData, SpreadsheetState, SelectionRange, CATEGORY_OPTIONS, HistoryEntry, FormatStyle } from './types';
+import { SheetData, SpreadsheetState, SelectionRange, CATEGORY_OPTIONS, HistoryEntry, FormatStyle, LearningEventRecord } from './types';
 
 export type Action =
   | { type: 'INIT'; payload: SheetData[] }
@@ -29,7 +29,9 @@ export type Action =
   | { type: 'UNFREEZE_ROWS'; payload: { sheetId?: number } }
   | { type: 'SET_FILTER'; payload: { sheetId?: number; columnId: number; value: string } }
   | { type: 'CLEAR_FILTER'; payload: { sheetId?: number; columnId?: number } }
-  | { type: 'APPLY_FILTERS'; payload: { sheetId?: number } };
+  | { type: 'APPLY_FILTERS'; payload: { sheetId?: number } }
+  | { type: 'APPEND_EDIT_LOG'; payload: LearningEventRecord }
+  | { type: 'APPLY_TO_SIMILAR'; payload: { sheetId?: number; rowIndex: number; colIndex: number; value: string; descriptionColIndex?: number } };
 
 const initialState: SpreadsheetState = {
   sheets: [],
@@ -41,6 +43,7 @@ const initialState: SpreadsheetState = {
   showFlaggedOnly: false,
   filters: {},
   filteredRows: {},
+  editLog: [],
 };
 
 function cloneSheet(sheet: SheetData): SheetData {
@@ -90,7 +93,7 @@ function reducer(state: SpreadsheetState, action: Action): SpreadsheetState {
       return { ...state, showFlaggedOnly: !state.showFlaggedOnly };
 
     case 'MARK_CLEAN':
-      return { ...state, globalDirty: false, sheets: state.sheets.map(s => ({ ...s, isDirty: false })) };
+      return { ...state, globalDirty: false, sheets: state.sheets.map(s => ({ ...s, isDirty: false })), editLog: [] };
 
     case 'SET_CELL_DATA': {
       const sId = action.payload.sheetId ?? state.activeSheetId;
@@ -108,7 +111,28 @@ function reducer(state: SpreadsheetState, action: Action): SpreadsheetState {
       newSheets[sId] = newSheet;
 
       const colName = newSheet.headers[action.payload.c] || `Col ${action.payload.c + 1}`;
-      return pushHistory(state, newSheets, `Row ${action.payload.r + 1}, ${colName}: "${oldVal}" → "${action.payload.val}"`, sId);
+      const normalizedHeader = (newSheet.headers[action.payload.c] || '').toLowerCase();
+      const isCategoryChange = normalizedHeader === 'category';
+      const description = newSheet.rows[action.payload.r]?.[newSheet.headers.findIndex(h => h.toLowerCase() === 'description')] || oldVal;
+
+      const nextState = pushHistory(state, newSheets, `Row ${action.payload.r + 1}, ${colName}: "${oldVal}" → "${action.payload.val}"`, sId);
+      if (!isCategoryChange) return nextState;
+
+      const newEdit: LearningEventRecord = {
+        sheet_title: newSheet.title,
+        row_index: action.payload.r,
+        description: String(description || ''),
+        category: String(action.payload.val || ''),
+        confidence: 1,
+        source: 'user',
+        metadata: {
+          column: colName,
+          previous_value: oldVal,
+          new_value: action.payload.val,
+        },
+      };
+
+      return { ...nextState, editLog: [...nextState.editLog, newEdit] };
     }
 
     case 'SET_CELL_STYLE': {
@@ -193,7 +217,26 @@ function reducer(state: SpreadsheetState, action: Action): SpreadsheetState {
       newSheet.isDirty = true;
       newSheets[sId] = newSheet;
 
-      return pushHistory(state, newSheets, `Bulk edit Category for ${rMax - rMin + 1} rows to "${action.payload.category}"`, sId);
+      const nextState = pushHistory(state, newSheets, `Bulk edit Category for ${rMax - rMin + 1} rows to "${action.payload.category}"`, sId);
+      const descriptionIndex = newSheet.headers.findIndex(h => h.toLowerCase() === 'description');
+      const newEvents: LearningEventRecord[] = [];
+      for (let r = rMin; r <= rMax; r++) {
+        if (!newSheet.rows[r]) continue;
+        newEvents.push({
+          sheet_title: newSheet.title,
+          row_index: r,
+          description: String(descriptionIndex >= 0 ? newSheet.rows[r][descriptionIndex] || '' : ''),
+          category: String(action.payload.category || ''),
+          confidence: 1,
+          source: 'user_bulk_update',
+          metadata: {
+            selected_range: `${rMin}-${rMax}`,
+            column_index: action.payload.colIndex,
+          },
+        });
+      }
+
+      return { ...nextState, editLog: [...nextState.editLog, ...newEvents] };
     }
 
     case 'UNDO': {
@@ -550,6 +593,48 @@ function reducer(state: SpreadsheetState, action: Action): SpreadsheetState {
       
       const newFilteredRows = { ...state.filteredRows, [sId]: visibleRows };
       return { ...state, filteredRows: newFilteredRows };
+    }
+
+    case 'APPEND_EDIT_LOG': {
+      return { ...state, editLog: [...state.editLog, action.payload], globalDirty: true };
+    }
+
+    case 'APPLY_TO_SIMILAR': {
+      const sId = action.payload.sheetId ?? state.activeSheetId;
+      const sheet = state.sheets[sId];
+      if (!sheet) return state;
+
+      const descriptionIndex = action.payload.descriptionColIndex ?? sheet.headers.findIndex(h => h.toLowerCase() === 'description');
+      const newSheets = [...state.sheets];
+      const newSheet = cloneSheet(sheet);
+      const changedRows: number[] = [];
+
+      const sourceText = String(action.payload.value || '').toUpperCase().trim();
+      if (!sourceText) return state;
+
+      newSheet.rows.forEach((row, idx) => {
+        const desc = String(row[descriptionIndex] || '').toUpperCase();
+        const sameEntity = desc.includes(sourceText) || sourceText.includes(desc);
+        if (sameEntity) {
+          row[action.payload.colIndex] = action.payload.value;
+          changedRows.push(idx);
+        }
+      });
+
+      if (changedRows.length === 0) return state;
+
+      newSheet.isDirty = true;
+      newSheets[sId] = newSheet;
+      const next = pushHistory(state, newSheets, `Applied category "${action.payload.value}" to ${changedRows.length} similar rows`, sId);
+      return { ...next, editLog: [...next.editLog, ...changedRows.map(r => ({
+        sheet_title: newSheet.title,
+        row_index: r,
+        description: String(newSheet.rows[r]?.[descriptionIndex] || ''),
+        category: String(action.payload.value || ''),
+        confidence: 1,
+        source: 'user_apply_similar',
+        metadata: { source_row: action.payload.rowIndex },
+      }))] };
     }
 
     default:

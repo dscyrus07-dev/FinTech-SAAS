@@ -52,6 +52,10 @@ export const exportToExcel = async (state: SpreadsheetState) => {
       worksheetName = 'Funds Received';
     } else if (worksheetName.includes('Funds Remittance')) {
       worksheetName = 'Funds Remittance';
+    } else if (worksheetName.includes('Source Analysis')) {
+      worksheetName = 'Source Analysis';
+    } else if (worksheetName.includes('Category Outcome')) {
+      worksheetName = 'Category Outcome';
     }
     
     const worksheet = workbook.addWorksheet(worksheetName);
@@ -169,33 +173,48 @@ export const exportToExcel = async (state: SpreadsheetState) => {
           }
         });
 
-        // Apply custom styling from user edits
+        // Apply persisted custom styles from the editor state
         headers.forEach((_, colIdx) => {
           const styleKey = `${rowIdx}-${colIdx}`;
           const customStyle = sheet.styles[styleKey];
           const cell = excelRow.getCell(colIdx + 1);
-          
-          if (customStyle) {
-            // Apply custom formatting on top of base formatting
-            if (customStyle.bold || customStyle.italic || customStyle.underline || customStyle.color) {
-              cell.font = {
-                bold: customStyle.bold,
-                italic: customStyle.italic,
-                underline: customStyle.underline,
-                color: customStyle.color ? { argb: 'FF' + customStyle.color.replace('#', '').toUpperCase() } : undefined,
-                size: 11 // Keep consistent size
-              };
-            }
-            if (customStyle.bg) {
-              cell.fill = {
-                type: 'pattern',
-                pattern: 'solid',
-                fgColor: { argb: 'FF' + customStyle.bg.replace('#', '').toUpperCase() }
-              };
-            }
-            if (customStyle.note) {
-              cell.note = customStyle.note;
-            }
+
+          if (!customStyle) return;
+
+          const font: ExcelJS.Font = {
+            ...(cell.font as ExcelJS.Font || {}),
+            bold: customStyle.bold ?? false,
+            italic: customStyle.italic ?? false,
+            underline: customStyle.underline ?? false,
+            size: customStyle.fontSize ?? (cell.font as ExcelJS.Font | undefined)?.size ?? 11,
+          };
+          if (customStyle.color) {
+            font.color = { argb: `FF${customStyle.color.replace('#', '').toUpperCase()}` };
+          }
+          cell.font = font;
+
+          if (customStyle.bg) {
+            cell.fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: `FF${customStyle.bg.replace('#', '').toUpperCase()}` },
+            };
+          }
+
+          if (customStyle.alignment?.horizontal) {
+            cell.alignment = {
+              ...(cell.alignment || {}),
+              horizontal: customStyle.alignment.horizontal,
+              vertical: 'middle',
+            };
+          }
+
+          if (customStyle.numberFormat) {
+            cell.numFmt = customStyle.numberFormat;
+          }
+
+          if (customStyle.note) {
+            cell.note = customStyle.note;
           }
         });
 
@@ -269,24 +288,33 @@ export const exportToExcel = async (state: SpreadsheetState) => {
            
            if (customStyle) {
               // Apply custom formatting on top of base formatting
-              if (customStyle.bold || customStyle.italic || customStyle.underline || customStyle.color) {
-                 cell.font = {
-                   bold: customStyle.bold,
-                   italic: customStyle.italic,
-                   underline: customStyle.underline,
-                   color: customStyle.color ? { argb: 'FF' + customStyle.color.replace('#', '').toUpperCase() } : undefined,
-                   size: 11 // Keep consistent size
-                 };
+              const font: ExcelJS.Font = {
+                ...(cell.font as ExcelJS.Font || {}),
+                bold: customStyle.bold ?? false,
+                italic: customStyle.italic ?? false,
+                underline: customStyle.underline ?? false,
+                size: customStyle.fontSize ?? (cell.font as ExcelJS.Font | undefined)?.size ?? 11,
+              };
+              if (customStyle.color) {
+                font.color = { argb: 'FF' + customStyle.color.replace('#', '').toUpperCase() };
               }
+              cell.font = font;
+
               if (customStyle.bg) {
-                 cell.fill = {
-                    type: 'pattern',
-                    pattern: 'solid',
-                    fgColor: { argb: 'FF' + customStyle.bg.replace('#', '').toUpperCase() }
-                 };
+                cell.fill = {
+                  type: 'pattern',
+                  pattern: 'solid',
+                  fgColor: { argb: 'FF' + customStyle.bg.replace('#', '').toUpperCase() }
+                };
+              }
+              if (customStyle.alignment?.horizontal) {
+                cell.alignment = { horizontal: customStyle.alignment.horizontal, vertical: 'middle' };
+              }
+              if (customStyle.numberFormat) {
+                cell.numFmt = customStyle.numberFormat;
               }
               if (customStyle.note) {
-                 cell.note = customStyle.note;
+                cell.note = customStyle.note;
               }
            }
            
